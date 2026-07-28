@@ -1,0 +1,65 @@
+import asyncio
+import aiohttp
+import re
+
+# 配置区域：加速后的直播源地址
+SOURCE_URLS = [
+    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
+    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+]
+
+OUTPUT_FILE = "live_playlist.m3u"
+MAX_CONCURRENCY = 30
+
+async def check_url(session, url):
+    try:
+        async with session.head(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            if resp.status == 200:
+                return url
+    except:
+        pass
+    return None
+
+async def main():
+    all_lines = []
+    # 1. 抓取源文件
+    async with aiohttp.ClientSession() as session:
+        for src_url in SOURCE_URLS:
+            try:
+                async with session.get(src_url) as resp:
+                    text = await resp.text()
+                    all_lines.extend(text.splitlines())
+            except Exception as e:
+                print(f"下载源失败: {e}")
+
+    # 2. 提取链接并去重
+    urls = list(set([line.strip() for line in all_lines if line.startswith("http")]))
+    print(f"共提取到 {len(urls)} 个链接，开始检测...")
+
+    # 3. 并发检测有效性
+    valid_urls = []
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    
+    async def limited_check(url):
+        async with semaphore:
+            return await check_url(session, url)
+
+    # 重新创建 session 用于检测
+    connector = aiohttp.TCPConnector(limit=MAX_CONCURRENCY)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [limited_check(url) for url in urls]
+        results = await asyncio.gather(*tasks)
+        valid_urls = [u for u in results if u]
+
+    print(f"检测完成，有效链接: {len(valid_urls)} 个")
+
+    # 4. 写入结果
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n")
+        for url in valid_urls:
+            # 简单处理：如果没有标题，就用链接最后一段做标题
+            name = url.split("/")[-1].split(".")[0] 
+            f.write(f'#EXTINF:-1, {name}\n{url}\n')
+
+if __name__ == "__main__":
+    asyncio.run(main())
