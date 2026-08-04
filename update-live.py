@@ -10,6 +10,9 @@ SOURCE_URLS = [
     "https://ghproxy.net/https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
     # 备用一个纯国内的源，防止上面两个也挂掉
     "https://raw.kkgithub.com/fanmingming/live/main/tv/m3u/ipv6.m3u", 
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/countries/cn.m3u",
+    "https://ghproxy.net/https://raw.githubusercontent.com/yuanzl77/IPTV/main/live.m3u",
+ 
 ]
 
 OUTPUT_FILE = "live_playlist.m3u"
