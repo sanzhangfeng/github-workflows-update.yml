@@ -2,10 +2,14 @@ import asyncio
 import aiohttp
 import re
 
-# 配置区域：加速后的直播源地址
+# ================= 配置区域 =================
+# 这里填写你要检测的直播源地址列表
+# 已替换为国内访问更稳定的源
 SOURCE_URLS = [
-    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
-    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+    "https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
+    "https://ghproxy.net/https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+    # 备用一个纯国内的源，防止上面两个也挂掉
+    "https://raw.kkgithub.com/fanmingming/live/main/tv/m3u/ipv6.m3u", 
 ]
 
 OUTPUT_FILE = "live_playlist.m3u"
