@@ -4,7 +4,6 @@ import re
 from datetime import datetime
 
 # ================= 配置区域 =================
-# 1. 这里填写你要检测的直播源地址列表 (已增加国内稳定源)
 SOURCE_URLS = [
     "https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
     "https://ghproxy.net/https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
@@ -12,94 +11,81 @@ SOURCE_URLS = [
     "https://ghproxy.net/https://raw.githubusercontent.com/yuanzl77/IPTV/main/live.m3u",
 ]
 
-# 2. 超时设置 (秒)，如果网络慢可以适当调大
-TIMEOUT = aiohttp.ClientTimeout(total=5)
-
-# 3. 输出文件名
+# 输出文件名
 OUTPUT_FILE = "result.m3u"
+
+# 并发限制：一次只测 50 个，防止被封 IP (之前可能太快了)
+CONCURRENCY_LIMIT = 50 
 # ==========================================
 
 async def check_url(session, url):
-    """异步检测单个链接是否有效"""
+    """
+    修改版检测逻辑：
+    不再使用 HEAD，而是尝试 GET 下载前 1024 字节。
+    只要能连上并读到数据，就算有效。
+    """
     try:
-        async with session.head(url, timeout=TIMEOUT) as response:
-            # 只要状态码是 200 或 301/302 重定向，通常都算有效
-            if response.status in [200, 301, 302]:
-                return url
-    except Exception:
-        pass
-    
-    # 如果 HEAD 请求失败，尝试 GET 请求（有些服务器禁止 HEAD）
-    try:
-        async with session.get(url, timeout=TIMEOUT) as response:
+        # 使用 GET 请求，只读一点点头部数据
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
             if response.status == 200:
-                return url
+                # 尝试读取一点点内容，确认不是空文件
+                await response.content.read(1024)
+                return True
     except Exception:
         pass
-        
-    return None
+    return False
+
+async def process_source(session, url, valid_links, semaphore):
+    """处理单个源文件的下载和解析"""
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                content = await response.text()
+                # 简单的 M3U 解析逻辑
+                lines = content.splitlines()
+                current_name = ""
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("#EXTINF"):
+                        # 提取频道名
+                        parts = line.split(",", 1)
+                        current_name = parts[1] if len(parts) > 1 else "Unknown"
+                    elif line.startswith("http"):
+                        # 发现链接，加入检测队列
+                        async with semaphore: # 限制并发数
+                            is_valid = await check_url(session, line)
+                            if is_valid:
+                                print(f"✅ 有效: {current_name}")
+                                valid_links.append(f"#EXTINF:-1,{current_name}\n{line}")
+    except Exception as e:
+        print(f"❌ 源下载失败: {url} - {e}")
 
 async def main():
     print(f"🚀 开始检测直播源... ({datetime.now().strftime('%H:%M:%S')})")
     
-    # 用于存储所有提取到的链接
-    all_links = []
+    # 设置信号量限制并发
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     
-    # 1. 下载并提取链接
-    connector = aiohttp.TCPConnector(ssl=False) # 忽略SSL证书错误，防止部分源报错
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY_LIMIT)
     async with aiohttp.ClientSession(connector=connector) as session:
+        valid_links = []
         tasks = []
+        
+        total_count = 0 # 这里简化处理，实际总数很难在异步前预知
+        
         for url in SOURCE_URLS:
-            tasks.append(fetch_and_parse(session, url))
-        
-        results = await asyncio.gather(*tasks)
-        for links in results:
-            all_links.extend(links)
+            tasks.append(process_source(session, url, valid_links, semaphore))
             
-    # 去重
-    unique_links = list(set(all_links))
-    print(f"📡 共提取到 {len(unique_links)} 个链接，开始检测连通性...")
-    
-    # 2. 并发检测链接有效性
-    valid_links = []
-    # 限制并发数为 50，防止瞬间请求太多被封 IP
-    semaphore = asyncio.Semaphore(50) 
-    
-    async def limited_check(url):
-        async with semaphore:
-            return await check_url(session, url)
-            
-    # 重新建立 session 用于检测
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [limited_check(url) for url in unique_links]
-        results = await asyncio.gather(*tasks)
-        
-        for link in results:
-            if link:
-                valid_links.append(link)
-                
-    print(f"✅ 检测完成，有效链接：{len(valid_links)} 个")
-    
-    # 3. 保存结果
+        await asyncio.gather(*tasks)
+
+    # 保存结果
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n")
         for link in valid_links:
-            # 简单的写入格式，你可以根据需要添加频道名
-            f.write(f"#EXTINF:-1,Channel\n{link}\n")
-            
-    print(f"💾 结果已保存到桌面: {OUTPUT_FILE}")
+            f.write(link + "\n")
 
-async def fetch_and_parse(session, url):
-    """下载 m3u 文件并提取 http/https 链接"""
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                text = await response.text()
-                # 使用正则提取所有 http/https 开头的链接
-                return re.findall(r'https?://[^\s"\'<>]+', text)
-    except Exception as e:
-        print(f"❌ 下载源失败: {url} - {e}")
-    return []
+    print(f"\n🎉 检测完成，有效链接：{len(valid_links)} 个")
+    print(f"💾 结果已保存到桌面: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     asyncio.run(main())
